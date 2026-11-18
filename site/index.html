@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Selecta Labs stats</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #14161a; --muted: #5f6672; --line: #e3e6eb;
+    --accent: #2f6bff; --good: #12a150; --bad: #d93a3a; --warn: #b7791f; --chip: #eef2ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --card: #171a21; --text: #eef0f4; --muted: #9aa3b2; --line: #272c36;
+      --accent: #6d97ff; --good: #3ccf7a; --bad: #ff6b6b; --warn: #e0a54a; --chip: #1f2740; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 20px; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; }
+  .muted { color: var(--muted); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .kpi .label { color: var(--muted); font-size: 13px; }
+  .kpi .value { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .kpi .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .chip { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--accent); margin-left: 6px; vertical-align: middle; }
+  .chip.warn { color: var(--warn); }
+  .apps { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
+  .app h3 { margin: 0 0 8px; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .app .big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rows { margin-top: 10px; border-top: 1px solid var(--line); }
+  .row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .links { margin-top: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .stars { color: #f5a623; letter-spacing: 1px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .up { background: var(--good); } .down { background: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  .chart svg { width: 100%; height: 180px; display: block; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .versions { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  #error { display: none; color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">Selecta Labs stats</h1>
+    <span class="muted" id="updated">Loading…</span>
+  </header>
+  <p id="error"></p>
+
+  <section class="kpis" id="kpis"></section>
+
+  <h2>Total downloads over time</h2>
+  <div class="card chart"><div id="chart"></div><div class="note" id="chartNote"></div></div>
+
+  <h2>Apps</h2>
+  <section class="apps" id="apps"></section>
+
+  <h2>Sites</h2>
+  <div class="card tablewrap"><table id="sites"></table></div>
+  <p class="note" id="footnote"></p>
+</main>
+
+<script>
+const fmt = (n) => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('en-US');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ago = (iso) => {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+};
+const niceDate = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const stars = (avg) => {
+  const full = Math.round(avg);
+  return '★'.repeat(full) + '☆'.repeat(5 - full);
+};
+
+function kpi(label, value, sub = '', chip = '') {
+  return `<div class="card kpi"><div class="label">${esc(label)}${chip}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+}
+
+function chart(history) {
+  const el = document.getElementById('chart');
+  if (!history || history.length < 2) {
+    el.innerHTML = '<p class="muted" style="margin:40px 0;text-align:center">The chart fills in as days pass. One point is saved each day.</p>';
+    return;
+  }
+  const W = 800, H = 180, P = 28;
+  const ys = history.map((h) => h.downloads);
+  const max = Math.max(...ys, 1), min = Math.min(...ys, 0);
+  const x = (i) => P + (i * (W - 2 * P)) / (history.length - 1);
+  const y = (v) => H - P - ((v - min) * (H - 2 * P)) / (max - min || 1);
+  const pts = history.map((h, i) => `${x(i).toFixed(1)},${y(h.downloads).toFixed(1)}`).join(' ');
+  const area = `${x(0)},${H - P} ${pts} ${x(history.length - 1)},${H - P}`;
+  const last = history[history.length - 1];
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Total downloads over time">
+    <polygon points="${area}" fill="var(--accent)" opacity="0.12"/>
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+    <circle cx="${x(history.length - 1)}" cy="${y(last.downloads)}" r="4" fill="var(--accent)"/>
+  </svg>`;
+  document.getElementById('chartNote').textContent =
+    `${niceDate(history[0].date)}: ${fmt(history[0].downloads)}  →  ${niceDate(last.date)}: ${fmt(last.downloads)}`;
+}
+
+function appCard(a) {
+  const rows = [];
+  if (a.store) rows.push(['Microsoft Store installs', fmt(a.store.installs) + (a.store.source === 'manual' ? ` <span class="chip warn">${niceDate(a.store.date)}</span>` : '')]);
+  if (a.store) rows.push(['Store page views', fmt(a.store.pageViews)]);
+  if (a.github) rows.push(['GitHub downloads', fmt(a.github.downloads)]);
+  if (a.storeId) rows.push(['Store rating', a.ratingCount ? `<span class="stars">${stars(a.rating)}</span> ${a.rating.toFixed(1)} (${fmt(a.ratingCount)})` : '<span class="muted">No ratings yet</span>']);
+  if (a.github) rows.push(['GitHub stars', fmt(a.github.stars)]);
+  const versions = a.github?.versions?.filter((v) => v.downloads).slice(0, 4).map((v) => `${esc(v.tag)}: ${fmt(v.downloads)}`).join(' · ');
+  const links = [
+    a.storeUrl && `<a href="${esc(a.storeUrl)}" target="_blank" rel="noopener">Store page</a>`,
+    a.repo && `<a href="https://github.com/${esc(a.repo)}" target="_blank" rel="noopener">GitHub</a>`,
+    a.site && `<a href="${esc(a.site)}" target="_blank" rel="noopener">Website</a>`,
+  ].filter(Boolean).join('');
+  return `<div class="card app">
+    <h3>${esc(a.name)}</h3>
+    <div class="muted" style="font-size:13px">Total downloads</div>
+    <div class="big">${fmt(a.downloads)}</div>
+    <div class="rows">${rows.map(([k, v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join('')}</div>
+    ${versions ? `<div class="versions">By version: ${versions}</div>` : ''}
+    <div class="links">${links}</div>
+  </div>`;
+}
+
+async function load() {
+  try {
+    const d = await fetch('data.json', { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    document.getElementById('title').textContent = d.title || 'Stats';
+    document.getElementById('updated').textContent = `Updated ${ago(d.updated)}`;
+    const t = d.totals;
+    const manual = d.apps.some((a) => a.store?.source === 'manual');
+    const rated = d.apps.filter((a) => a.ratingCount);
+    const avg = rated.length ? rated.reduce((s, a) => s + a.rating * a.ratingCount, 0) / rated.reduce((s, a) => s + a.ratingCount, 0) : null;
+    document.getElementById('kpis').innerHTML = [
+      kpi('Total downloads', fmt(t.downloads), 'Store installs + GitHub downloads'),
+      kpi('Microsoft Store installs', fmt(t.storeInstalls), manual ? 'Read by hand. Goes live when the Store key is added.' : 'Live from Partner Center', manual ? '<span class="chip warn">manual</span>' : '<span class="chip">live</span>'),
+      kpi('GitHub downloads', fmt(t.githubDownloads), 'Installer files from releases'),
+      kpi('Ratings', fmt(t.ratingCount), avg ? `Average ${avg.toFixed(1)} of 5` : 'No ratings yet'),
+      kpi('Site visits', d.visitsOn ? fmt(t.visits) : '—', d.visitsOn ? 'All sites, all time' : 'Not set up yet'),
+    ].join('');
+    chart(d.history);
+    document.getElementById('apps').innerHTML = d.apps.map(appCard).join('');
+    document.getElementById('sites').innerHTML =
+      '<tr><th>Site</th><th>Status</th><th class="num">Visits</th><th class="num">Response</th></tr>' +
+      d.sites.map((s) => `<tr>
+        <td><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url.replace(/^https?:\/\//, ''))}</a></td>
+        <td><span class="dot ${s.up ? 'up' : 'down'}"></span>${s.up ? 'Up' : 'Down (' + esc(s.status) + ')'}</td>
+        <td class="num">${s.visits === null || s.visits === undefined ? '—' : fmt(s.visits)}</td>
+        <td class="num">${fmt(s.ms)} ms</td></tr>`).join('');
+    document.getElementById('footnote').textContent =
+      'Updated every day by GitHub Actions. Ratings come from the public Microsoft Store page.' +
+      (d.visitsOn ? '' : ' Site visits appear after visitor counting is added to the sites.');
+  } catch (e) {
+    const el = document.getElementById('error');
+    el.style.display = 'block';
+    el.textContent = 'Could not load the data. Try again in a minute.';
+    document.getElementById('updated').textContent = '';
+  }
+}
+load();
+</script>
+</body>
+</html>

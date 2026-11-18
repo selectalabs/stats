@@ -1,0 +1,9 @@
+{
+  "name": "selecta-stats",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Public stats dashboard for Selecta Labs apps, updated daily by GitHub Actions.",
+  "scripts": { "collect": "node collect.mjs" },
+  "engines": { "node": ">=20" }
+}
