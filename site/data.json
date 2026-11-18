@@ -1,0 +1,156 @@
+{
+  "title": "Selecta Labs stats",
+  "updated": "2026-11-18T08:36:49.408Z",
+  "storeLive": false,
+  "visitsOn": false,
+  "totals": {
+    "downloads": 35,
+    "storeInstalls": 5,
+    "githubDownloads": 30,
+    "ratingCount": 0,
+    "visits": null
+  },
+  "apps": [
+    {
+      "name": "Selecta AI",
+      "storeId": "9MXVRN1VZSC5",
+      "repo": "selectalabs/selectaai",
+      "site": "https://selectalabs.github.io/selectaai/",
+      "storeUrl": "https://apps.microsoft.com/detail/9MXVRN1VZSC5",
+      "rating": 0,
+      "ratingCount": 0,
+      "website": "https://mohamed-hamdy.github.io/SelectaAI/",
+      "updated": "2026-11-16T02:27:55Z",
+      "store": {
+        "installs": 4,
+        "pageViews": 23,
+        "date": "2026-11-17",
+        "source": "manual"
+      },
+      "github": {
+        "stars": 0,
+        "forks": 0,
+        "downloads": 30,
+        "versions": [
+          {
+            "tag": "v1.5.0",
+            "date": "2026-10-21",
+            "downloads": 24
+          },
+          {
+            "tag": "v1.4.1",
+            "date": "2026-10-17",
+            "downloads": 4
+          },
+          {
+            "tag": "v1.4.0",
+            "date": "2026-10-17",
+            "downloads": 2
+          },
+          {
+            "tag": "v1.3.5",
+            "date": "2026-10-15",
+            "downloads": 0
+          }
+        ]
+      },
+      "downloads": 34
+    },
+    {
+      "name": "AskaDB",
+      "storeId": "9N9RGB8ZRK8N",
+      "repo": "selectalabs/askadb",
+      "site": "https://selectalabs.github.io/askadb/",
+      "storeUrl": "https://apps.microsoft.com/detail/9N9RGB8ZRK8N",
+      "rating": 0,
+      "ratingCount": 0,
+      "website": "https://mohamed-hamdy.github.io/askadb-site/",
+      "updated": "2026-11-09T10:17:20Z",
+      "store": {
+        "installs": 1,
+        "pageViews": 4,
+        "date": "2026-11-17",
+        "source": "manual"
+      },
+      "github": {
+        "stars": 0,
+        "forks": 0,
+        "downloads": 0,
+        "versions": []
+      },
+      "downloads": 1
+    },
+    {
+      "name": "Toolecta",
+      "storeId": null,
+      "repo": "selectalabs/toolecta",
+      "site": "https://selectalabs.github.io/toolecta/",
+      "github": {
+        "stars": 0,
+        "forks": 0,
+        "downloads": 0,
+        "versions": []
+      },
+      "downloads": 0
+    }
+  ],
+  "sites": [
+    {
+      "url": "https://selectalabs.github.io/selectaai/",
+      "up": true,
+      "status": 200,
+      "ms": 152,
+      "visits": null
+    },
+    {
+      "url": "https://selectalabs.github.io/askadb/",
+      "up": true,
+      "status": 200,
+      "ms": 116,
+      "visits": null
+    },
+    {
+      "url": "https://selectalabs.github.io/toolecta/",
+      "up": true,
+      "status": 200,
+      "ms": 66,
+      "visits": null
+    },
+    {
+      "url": "https://selectalabs.github.io/",
+      "up": true,
+      "status": 200,
+      "ms": 111,
+      "visits": null
+    }
+  ],
+  "history": [
+    {
+      "date": "2026-11-17",
+      "downloads": 35,
+      "storeInstalls": 5,
+      "githubDownloads": 30,
+      "ratingCount": 0,
+      "visits": null,
+      "apps": {
+        "Selecta AI": 34,
+        "AskaDB": 1,
+        "Toolecta": 0
+      }
+    },
+    {
+      "date": "2026-11-18",
+      "downloads": 35,
+      "storeInstalls": 5,
+      "githubDownloads": 30,
+      "ratingCount": 0,
+      "visits": null,
+      "apps": {
+        "Selecta AI": 34,
+        "AskaDB": 1,
+        "Toolecta": 0
+      }
+    }
+  ],
+  "warnings": []
+}
