@@ -1,5 +1,4 @@
 {
-  "title": "Selecta Labs stats",
   "githubOrg": "selectalabs",
   "apps": [
     {
@@ -7,14 +6,22 @@
       "storeId": "9MXVRN1VZSC5",
       "repo": "selectalabs/selectaai",
       "site": "https://selectalabs.github.io/selectaai/",
-      "storeManual": { "installs": 4, "pageViews": 23, "date": "2026-11-17" }
+      "storeManual": {
+        "installs": 4,
+        "pageViews": 23,
+        "date": "2026-11-17"
+      }
     },
     {
       "name": "AskaDB",
       "storeId": "9N9RGB8ZRK8N",
       "repo": "selectalabs/askadb",
       "site": "https://selectalabs.github.io/askadb/",
-      "storeManual": { "installs": 1, "pageViews": 4, "date": "2026-11-17" }
+      "storeManual": {
+        "installs": 1,
+        "pageViews": 4,
+        "date": "2026-11-17"
+      }
     },
     {
       "name": "Toolecta",
@@ -22,6 +29,7 @@
       "site": "https://selectalabs.github.io/toolecta/"
     }
   ],
-  "extraSites": ["https://selectalabs.github.io/"],
-  "goatcounter": ""
+  "extraSites": [
+    "https://selectalabs.github.io/"
+  ]
 }

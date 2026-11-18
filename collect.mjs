@@ -1,5 +1,5 @@
-// Collects public stats for Selecta Labs apps and writes site/data.json for the dashboard.
-// Works with no secrets. Optional secrets add Store installs (Partner Center API).
+// Daily collector: reads downloads, ratings and site status, then saves one snapshot per day in Supabase.
+// Runs in GitHub Actions. Secrets: SUPABASE_URL, SUPABASE_SERVICE_KEY. Optional: STORE_TENANT_ID, STORE_CLIENT_ID, STORE_CLIENT_SECRET.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,16 +7,16 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-const HISTORY_FILE = path.join(ROOT, 'data', 'history.json');
-const OUT_FILE = path.join(ROOT, 'site', 'data.json');
 const env = process.env;
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }); // YYYY-MM-DD in Cairo
 const INSTALLER = /\.(exe|msi|msix|dmg|appimage|deb|rpm)$/i;
+const warnings = [];
 
 async function getJSON(url, opts = {}) {
   const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(30000) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 const g = (o, ...names) => {
   if (!o) return undefined;
@@ -25,35 +25,38 @@ const g = (o, ...names) => {
     if (k !== undefined) return o[k];
   }
 };
-const warn = [];
-const tryIt = async (label, fn, fallback = null) => {
-  try { return await fn(); } catch (e) { warn.push(`${label}: ${e.message}`); console.error(label, e.message); return fallback; }
-};
-
-// ---- Microsoft Store: public rating (no key needed) ----
-async function storePublic(id) {
-  const r = await getJSON(`https://storeedgefd.dsx.mp.microsoft.com/v9.0/products/${id}?market=US&locale=en-us&deviceFamily=Windows.Desktop`);
-  const p = r.Payload || {};
-  return { rating: Number(p.AverageRating || 0), ratingCount: Number(p.RatingCount || 0), website: p.AppWebsiteUrl || null, updated: p.LastUpdateDateUtc || null };
+async function tryIt(label, fn, fallback = null) {
+  try { return await fn(); } catch (e) { warnings.push(`${label}: ${e.message}`); return fallback; }
 }
 
-// ---- Microsoft Store: installs (needs Partner Center API keys) ----
-let storeTokenPromise;
+// ---- Supabase (service key, skips row rules) ----
+const SB = env.SUPABASE_URL?.replace(/\/$/, '');
+const SB_KEY = env.SUPABASE_SERVICE_KEY;
+const sbHeaders = SB_KEY
+  ? { apikey: SB_KEY, 'Content-Type': 'application/json', ...(SB_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SB_KEY}` } : {}) }
+  : {};
+
+// ---- Microsoft Store ----
+async function storePublic(id) {
+  const r = await getJSON(`https://storeedgefd.dsx.mp.microsoft.com/v9.0/products/${id}?market=US&locale=en-us&deviceFamily=Windows.Desktop`);
+  const p = r?.Payload || {};
+  return { rating: Number(p.AverageRating || 0), ratingCount: Number(p.RatingCount || 0) };
+}
+let tokenP;
 function storeToken() {
   const { STORE_TENANT_ID: t, STORE_CLIENT_ID: id, STORE_CLIENT_SECRET: s } = env;
   if (!t || !id || !s) return null;
-  storeTokenPromise ??= getJSON(`https://login.microsoftonline.com/${t}/oauth2/token`, {
+  tokenP ??= getJSON(`https://login.microsoftonline.com/${t}/oauth2/token`, {
     method: 'POST',
     body: new URLSearchParams({ grant_type: 'client_credentials', client_id: id, client_secret: s, resource: 'https://manage.devcenter.microsoft.com' }),
   }).then((r) => r.access_token);
-  return storeTokenPromise;
+  return tokenP;
 }
 async function storeFunnel(id) {
-  const tokenP = storeToken();
-  if (!tokenP) return null;
-  const token = await tokenP;
+  const tp = storeToken();
+  if (!tp) return null;
   const qs = new URLSearchParams({ applicationId: id, startDate: '2025-01-01', endDate: TODAY });
-  const r = await getJSON(`https://manage.devcenter.microsoft.com/v1.0/my/analytics/funnel?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await getJSON(`https://manage.devcenter.microsoft.com/v1.0/my/analytics/funnel?${qs}`, { headers: { Authorization: `Bearer ${await tp}` } });
   const out = { installs: 0, pageViews: 0 };
   for (const row of g(r, 'Value') || []) {
     const type = String(g(row, 'MetricType') || '').toLowerCase();
@@ -64,12 +67,10 @@ async function storeFunnel(id) {
   return out;
 }
 
-// ---- GitHub releases ----
-async function gh(p) {
-  return getJSON(`https://api.github.com${p}`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'selecta-stats', ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}) },
-  });
-}
+// ---- GitHub ----
+const gh = (p) => getJSON(`https://api.github.com${p}`, {
+  headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'selecta-stats', ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}) },
+});
 async function github(repo) {
   const info = await gh(`/repos/${repo}`);
   const releases = [];
@@ -86,7 +87,7 @@ async function github(repo) {
   return { stars: info.stargazers_count, forks: info.forks_count, downloads: versions.reduce((s, v) => s + v.downloads, 0), versions };
 }
 
-// ---- Sites: up/down + visits (GoatCounter, optional) ----
+// ---- Sites ----
 async function siteStatus(url) {
   const t0 = Date.now();
   try {
@@ -95,12 +96,6 @@ async function siteStatus(url) {
   } catch (e) {
     return { up: false, status: e.name === 'TimeoutError' ? 'timeout' : 'error', ms: Date.now() - t0 };
   }
-}
-async function visits(pagePath) {
-  const code = env.GOATCOUNTER_CODE || CONFIG.goatcounter;
-  if (!code) return null;
-  const r = await getJSON(`https://${code}.goatcounter.com/counter/${encodeURIComponent(pagePath)}.json`);
-  return Number(String(r.count ?? '0').replace(/[^\d]/g, '')) || 0;
 }
 
 async function main() {
@@ -119,45 +114,42 @@ async function main() {
     apps.push(app);
   }
 
-  const siteUrls = [...new Set([...CONFIG.apps.map((a) => a.site).filter(Boolean), ...(CONFIG.extraSites || [])])];
+  // Sites: from the dashboard's site list when available, plus config.
+  let siteRows = [];
+  if (SB && SB_KEY) siteRows = (await tryIt('sites list', () => getJSON(`${SB}/rest/v1/sites?select=id,url`, { headers: sbHeaders }), [])) || [];
+  const urls = [...new Set([...siteRows.map((s) => s.url), ...CONFIG.apps.map((a) => a.site).filter(Boolean), ...(CONFIG.extraSites || [])])];
   const sites = [];
-  for (const url of siteUrls) {
-    const s = { url, ...(await siteStatus(url)) };
-    s.visits = await tryIt(`visits ${url}`, () => visits(new URL(url).pathname));
-    sites.push(s);
-  }
-  const totalVisits = await tryIt('visits total', () => visits('TOTAL'));
-
-  const totals = {
-    downloads: apps.reduce((s, a) => s + a.downloads, 0),
-    storeInstalls: apps.reduce((s, a) => s + (a.store?.installs || 0), 0),
-    githubDownloads: apps.reduce((s, a) => s + (a.github?.downloads || 0), 0),
-    ratingCount: apps.reduce((s, a) => s + (a.ratingCount || 0), 0),
-    visits: totalVisits,
-  };
-
-  const history = fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) : [];
-  const next = history.filter((h) => h.date !== TODAY);
-  next.push({ date: TODAY, ...totals, apps: Object.fromEntries(apps.map((a) => [a.name, a.downloads])) });
-  next.sort((x, y) => x.date.localeCompare(y.date));
-  fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true });
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(next, null, 2) + '\n');
+  for (const url of urls) sites.push({ url, ...(await siteStatus(url)) });
 
   const data = {
-    title: CONFIG.title,
     updated: new Date().toISOString(),
     storeLive: Boolean(storeToken()),
-    visitsOn: Boolean(env.GOATCOUNTER_CODE || CONFIG.goatcounter),
-    totals,
     apps,
     sites,
-    history: next,
-    warnings: warn,
+    totals: {
+      downloads: apps.reduce((s, a) => s + a.downloads, 0),
+      storeInstalls: apps.reduce((s, a) => s + (a.store?.installs || 0), 0),
+      githubDownloads: apps.reduce((s, a) => s + (a.github?.downloads || 0), 0),
+      ratingCount: apps.reduce((s, a) => s + (a.ratingCount || 0), 0),
+    },
+    warnings,
   };
-  fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
-  fs.writeFileSync(OUT_FILE, JSON.stringify(data, null, 2) + '\n');
-  console.log(`Total downloads ${totals.downloads} (Store ${totals.storeInstalls}, GitHub ${totals.githubDownloads}). Ratings ${totals.ratingCount}.`);
-  if (warn.length) console.log('Warnings:\n- ' + warn.join('\n- '));
+
+  console.log(`Total downloads ${data.totals.downloads} (Store ${data.totals.storeInstalls}, GitHub ${data.totals.githubDownloads}). Ratings ${data.totals.ratingCount}.`);
+  if (warnings.length) console.log('Warnings:\n- ' + warnings.join('\n- '));
+
+  if (!SB || !SB_KEY) {
+    console.log('SUPABASE_URL / SUPABASE_SERVICE_KEY not set: nothing saved.');
+    fs.writeFileSync(path.join(ROOT, 'snapshot-preview.json'), JSON.stringify(data, null, 2));
+    return;
+  }
+  const res = await fetch(`${SB}/rest/v1/snapshots?on_conflict=day`, {
+    method: 'POST',
+    headers: { ...sbHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ day: TODAY, data }),
+  });
+  if (!res.ok) throw new Error(`Saving the snapshot failed: HTTP ${res.status} ${await res.text()}`);
+  console.log(`Saved snapshot for ${TODAY}.`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e.message); process.exit(1); });
