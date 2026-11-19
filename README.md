@@ -21,7 +21,7 @@ Preview with sample data: open `/?demo` on the dashboard.
 
 ## Setup (one time)
 
-1. **Supabase**: create a free project. Open SQL Editor, paste `supabase/schema.sql` and click Run.
+1. **Supabase**: create a free project. Open SQL Editor, paste `supabase/schema.sql` and click Run. Then do the same with `supabase/roles.sql` (team roles: Super admin, Admin, Viewer).
 2. **Google login**:
    - In Google Cloud Console, open APIs & Services → Credentials and create an OAuth client ID (Web application).
    - Set its redirect URI to the callback URL shown in Supabase → Authentication → Sign In / Providers → Google.

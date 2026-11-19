@@ -5,7 +5,7 @@
   const CFG = window.SELECTA_CONFIG || {};
   const PARAMS = new URLSearchParams(location.search);
   const CONFIGURED = CFG.supabaseUrl && !String(CFG.supabaseUrl).startsWith('__');
-  const DEMO = PARAMS.has('demo') || !CONFIGURED;
+  const DEMO = PARAMS.has('demo');
   const SNIPPET_URL = new URL('selecta.js', location.href.split('?')[0].split('#')[0]).href;
 
   // ---------- helpers ----------
@@ -63,7 +63,7 @@
         if (error) throw error;
       },
       async signOut() { await sb.auth.signOut(); },
-      async isAdmin() { return unwrap(await sb.rpc('is_admin')) === true; },
+      async role() { return unwrap(await sb.rpc('my_role')) || null; },
       async snapshots(days = 180) { return unwrap(await sb.from('snapshots').select('day,data').gte('day', daysAgo(days)).order('day')); },
       async siteDaily(days = 60) { return unwrap(await sb.from('site_daily').select('*').gte('day', daysAgo(days))); },
       async sites() { return unwrap(await sb.from('sites').select('*').order('name')); },
@@ -85,7 +85,8 @@
         return sb.storage.from('ad-images').getPublicUrl(path).data.publicUrl;
       },
       async admins() { return unwrap(await sb.from('admins').select('*').order('added_at')); },
-      async addAdmin(email) { unwrap(await sb.from('admins').insert({ email: email.toLowerCase().trim() })); },
+      async addAdmin(email, role) { unwrap(await sb.from('admins').insert({ email: email.toLowerCase().trim(), role })); },
+      async setRole(email, role) { unwrap(await sb.from('admins').update({ role }).eq('email', email)); },
       async removeAdmin(email) { unwrap(await sb.from('admins').delete().eq('email', email)); },
     };
   }
@@ -132,14 +133,14 @@
       { id: 'a2', name: 'AskaDB on the Store', site_id: 'toolecta', slot: 'bottom', kind: 'image', title: 'AskaDB', image_url: 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#3563ff"/><stop offset="1" stop-color="#7a5cff"/></linearGradient></defs><rect width="1200" height="240" fill="url(#g)"/><text x="60" y="110" font-family="Arial" font-size="54" font-weight="700" fill="#fff">AskaDB</text><text x="60" y="165" font-family="Arial" font-size="28" fill="#e6ebff">Ask your database in plain English. Free on the Microsoft Store.</text></svg>'), link_url: 'https://apps.microsoft.com/detail/9N9RGB8ZRK8N', active: true, priority: 0, starts_at: null, ends_at: null, created_at: daysAgo(6) + 'T10:00:00Z' },
       { id: 'a3', name: 'Black Friday banner', site_id: 'selectaai', slot: 'inline', kind: 'html', html: '<div style="padding:18px;background:#111;color:#fff;border-radius:10px;font-family:Arial">Black Friday: 50% off Pro</div>', active: false, priority: 0, starts_at: '2026-11-27T00:00:00Z', ends_at: '2026-11-30T23:00:00Z', created_at: daysAgo(2) + 'T10:00:00Z' },
     ];
-    let admins = [{ email: 'mohamed547754@gmail.com', added_at: daysAgo(30) }, { email: 'mymhelmy80@gmail.com', added_at: daysAgo(30) }];
+    let admins = [{ email: 'mohamed547754@gmail.com', role: 'super_admin', added_at: daysAgo(30) }, { email: 'mymhelmy80@gmail.com', role: 'super_admin', added_at: daysAgo(30) }];
     const totals = [{ ad_id: 'a1', views: 1840, clicks: 41 }, { ad_id: 'a2', views: 620, clicks: 9 }, { ad_id: 'a3', views: 0, clicks: 0 }];
     let sitesList = sites.slice();
     let n = 10;
     return {
       async user() { return { email: 'mohamed547754@gmail.com', user_metadata: { full_name: 'Demo admin' } }; },
       async signIn() {}, async signOut() { location.search = ''; },
-      async isAdmin() { return true; },
+      async role() { return 'super_admin'; },
       async snapshots() { return snaps; },
       async siteDaily() { return daily; },
       async sites() { return sitesList; },
@@ -155,13 +156,17 @@
       async deleteAd(id) { ads = ads.filter((a) => a.id !== id); },
       async uploadImage(file) { return new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(file); }); },
       async admins() { return admins; },
-      async addAdmin(email) { admins.push({ email, added_at: new Date().toISOString() }); },
+      async addAdmin(email, role) { admins.push({ email, role, added_at: new Date().toISOString() }); },
+      async setRole(email, role) { admins = admins.map((a) => (a.email === email ? { ...a, role } : a)); },
       async removeAdmin(email) { admins = admins.filter((a) => a.email !== email); },
     };
   }
 
-  const api = DEMO ? demoApi() : realApi();
-  const state = { user: null, view: (location.hash || '#overview').slice(1), cache: {}, charts: [] };
+  const api = DEMO ? demoApi() : CONFIGURED ? realApi() : null;
+  const state = { user: null, role: null, view: (location.hash || '#overview').slice(1), cache: {}, charts: [] };
+  const ROLES = { super_admin: 'Super admin', admin: 'Admin', viewer: 'Viewer' };
+  const canEdit = () => state.role === 'super_admin' || state.role === 'admin';
+  const isSuper = () => state.role === 'super_admin';
   const root = $('#root');
 
   // ---------- theme ----------
@@ -233,7 +238,7 @@
           <nav class="nav">${NAV.map(([id, label]) => `<button data-view="${id}" class="${state.view === id ? 'active' : ''}">${ICONS[id]}${label}${id === 'ads' && activeAds ? `<span class="badge">${activeAds}</span>` : ''}</button>`).join('')}</nav>
           <div class="side-foot">
             <div class="avatar">${pic ? `<img src="${esc(pic)}" alt="">` : esc((name[0] || '?').toUpperCase())}</div>
-            <div class="who"><div class="name">${esc(u.user_metadata?.full_name || 'Admin')}</div><div>${esc(u.email || '')}</div></div>
+            <div class="who"><div class="name">${esc(u.user_metadata?.full_name || u.email || '')}</div><div>${esc(ROLES[state.role] || '')} · ${esc(u.email || '')}</div></div>
             <button class="icon-btn" id="logout" title="Sign out">${ICONS.logout}</button>
           </div>
         </aside>
@@ -404,7 +409,7 @@
           <code class="snippet" id="snip">${esc(snippet(state.cache.sites[0]?.id || 'your-site'))}</code>
           <p class="muted" style="font-size:12px;margin-bottom:0">Change <b>data-site</b> to the site ID. Ads go to the top, the middle and the bottom of the page by themselves. To choose the exact spot, add <code>&lt;div data-selecta-ad="top"&gt;&lt;/div&gt;</code> (or inline, bottom) where you want it.</p>
         </div></div>
-        <div class="panel"><div class="panel-head"><h3>Add a site</h3></div><div class="panel-body">
+        <div class="panel ${canEdit() ? '' : 'hidden'}"><div class="panel-head"><h3>Add a site</h3></div><div class="panel-body">
           <form id="siteForm" class="grid" style="gap:12px">
             <div class="row2">
               <div class="field"><label>Site ID</label><input type="text" name="id" placeholder="my-site" pattern="[a-z0-9-]{2,40}" required><span class="hint">Small letters, numbers and dashes.</span></div>
@@ -445,7 +450,7 @@
     v.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
         <div class="muted">${list.length} ads · ${list.filter((a) => a.active).length} on</div>
-        <button class="btn primary" id="newAd">${ICONS.plus}New ad</button>
+        ${canEdit() ? `<button class="btn primary" id="newAd">${ICONS.plus}New ad</button>` : '<span class="chip gray">View only</span>'}
       </div>
       <div class="panel"><div class="table-wrap">${list.length ? `<table>
         <tr><th>Ad</th><th>Site</th><th>Placement</th><th>Status</th><th class="r">Views</th><th class="r">Clicks</th><th class="r">CTR</th><th>On</th><th class="r"></th></tr>
@@ -453,10 +458,10 @@
           <td><div style="font-weight:600">${esc(a.name)}</div><div class="muted" style="font-size:12px">${KINDS[a.kind]}${a.starts_at || a.ends_at ? ` · ${a.starts_at ? niceDateTime(a.starts_at) : 'now'} → ${a.ends_at ? niceDateTime(a.ends_at) : 'no end'}` : ''}</div></td>
           <td>${esc(siteName(a.site_id))}</td><td>${SLOTS[a.slot]}</td><td>${adStatus(a)}</td>
           <td class="r num">${fmt(t.views)}</td><td class="r num">${fmt(t.clicks)}</td><td class="r num">${pct(Number(t.clicks), Number(t.views))}</td>
-          <td><label class="switch"><input type="checkbox" data-toggle="${esc(a.id)}" ${a.active ? 'checked' : ''}><span></span></label></td>
-          <td class="r" style="white-space:nowrap"><button class="btn sm" data-edit="${esc(a.id)}">Edit</button> <button class="btn sm danger" data-del="${esc(a.id)}">Delete</button></td>
+          <td><label class="switch"><input type="checkbox" data-toggle="${esc(a.id)}" ${a.active ? 'checked' : ''} ${canEdit() ? '' : 'disabled'}><span></span></label></td>
+          <td class="r" style="white-space:nowrap">${canEdit() ? `<button class="btn sm" data-edit="${esc(a.id)}">Edit</button> <button class="btn sm danger" data-del="${esc(a.id)}">Delete</button>` : ''}</td>
         </tr>`; }).join('')}</table>` : '<div class="empty">No ads yet. Click "New ad" to create your first one.</div>'}</div></div>`;
-    $('#newAd').onclick = () => adForm();
+    if ($('#newAd')) $('#newAd').onclick = () => adForm();
     $$('[data-edit]', v).forEach((b) => (b.onclick = () => adForm(list.find((a) => a.id === b.dataset.edit))));
     $$('[data-del]', v).forEach((b) => (b.onclick = async () => {
       const a = list.find((x) => x.id === b.dataset.del);
@@ -571,15 +576,23 @@
     const theme = document.documentElement.dataset.theme || 'auto';
     v.innerHTML = `
       <div class="grid halves">
-        <div class="panel"><div class="panel-head"><h3>Admins</h3></div>
-          <div class="table-wrap"><table>${admins.map((a) => `<tr><td>${esc(a.email)}${a.email === me ? ' <span class="chip">you</span>' : ''}</td><td class="r">${a.email === me ? '' : `<button class="btn sm danger" data-rm="${esc(a.email)}">Remove</button>`}</td></tr>`).join('')}</table></div>
-          <div class="panel-body" style="border-top:1px solid var(--line)">
+        <div class="panel"><div class="panel-head"><h3>Team</h3><span class="chip">${esc(ROLES[state.role] || '')}</span></div>
+          <div class="table-wrap"><table>
+            <tr><th>Email</th><th>Role</th><th class="r"></th></tr>
+            ${admins.map((a) => `<tr><td>${esc(a.email)}${a.email === me ? ' <span class="chip">you</span>' : ''}</td>
+              <td>${isSuper() && a.email !== me
+                ? `<select class="role-select" data-role="${esc(a.email)}" style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel)">${Object.entries(ROLES).map(([k, l]) => `<option value="${k}" ${a.role === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`
+                : esc(ROLES[a.role] || a.role)}</td>
+              <td class="r">${isSuper() && a.email !== me ? `<button class="btn sm danger" data-rm="${esc(a.email)}">Remove</button>` : ''}</td></tr>`).join('')}
+          </table></div>
+          ${isSuper() ? `<div class="panel-body" style="border-top:1px solid var(--line)">
             <form id="adminForm" style="display:flex;gap:8px;flex-wrap:wrap">
               <div class="field" style="flex:1;min-width:200px"><input type="email" name="email" placeholder="name@gmail.com" required></div>
-              <button class="btn primary" type="submit">${ICONS.plus}Add admin</button>
+              <div class="field"><select name="role">${Object.entries(ROLES).map(([k, l]) => `<option value="${k}" ${k === 'viewer' ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+              <button class="btn primary" type="submit">${ICONS.plus}Add</button>
             </form>
-            <p class="muted" style="font-size:12px;margin-bottom:0">New admins sign in with the Google account of that email.</p>
-          </div>
+            <p class="muted" style="font-size:12px;margin-bottom:0"><b>Super admin</b>: everything, including the team. <b>Admin</b>: ads and sites. <b>Viewer</b>: numbers only. People sign in with the Google account of that email.</p>
+          </div>` : '<div class="panel-body muted" style="border-top:1px solid var(--line);font-size:12px">Only super admins can change the team.</div>'}
         </div>
         <div class="grid" style="align-content:start">
           <div class="panel"><div class="panel-head"><h3>Where ads show</h3></div><div class="panel-body">
@@ -595,23 +608,29 @@
       </div>`;
     $$('input[name=theme]', v).forEach((r) => (r.onchange = () => setTheme(r.value)));
     $$('[data-rm]', v).forEach((b) => (b.onclick = async () => {
-      if (!confirm(`Remove ${b.dataset.rm} from admins?`)) return;
+      if (!confirm(`Remove ${b.dataset.rm} from the team?`)) return;
       try { await api.removeAdmin(b.dataset.rm); render(); toast('Admin removed'); } catch (e) { toast(e.message); }
     }));
-    $('#adminForm').onsubmit = async (e) => {
+    if ($('#adminForm')) $('#adminForm').onsubmit = async (e) => {
       e.preventDefault();
-      try { await api.addAdmin(new FormData(e.target).get('email')); render(); toast('Admin added'); } catch (err) { toast(err.message); }
+      const f = new FormData(e.target);
+      try { await api.addAdmin(f.get('email'), f.get('role')); render(); toast('Added to the team'); } catch (err) { toast(err.message); }
     };
+    $$('[data-role]', v).forEach((sel) => (sel.onchange = async () => {
+      try { await api.setRole(sel.dataset.role, sel.value); toast('Role updated'); } catch (e) { toast(e.message); render(); }
+    }));
   }
 
   // ---------- start ----------
   async function start() {
+    if (!DEMO && !CONFIGURED) return showLogin('The dashboard is not connected to its database yet.');
     try {
       state.user = await api.user();
       if (!state.user) return showLogin();
-      if (!(await api.isAdmin())) {
+      state.role = await api.role();
+      if (!state.role) {
         await api.signOut();
-        return showLogin(`${state.user.email} is not an admin. Ask an admin to add you.`);
+        return showLogin(`${state.user.email} is not on the team. Ask a super admin to add you.`);
       }
       root.innerHTML = '<div class="loading">Loading your numbers…</div>';
       await load();
