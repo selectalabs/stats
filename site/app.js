@@ -35,6 +35,7 @@
   }
 
   const ICONS = {
+    usage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>',
     overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
     apps: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
     sites: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
@@ -64,6 +65,14 @@
       },
       async signOut() { await sb.auth.signOut(); },
       async role() { return unwrap(await sb.rpc('my_role')) || null; },
+      async usage(days = 60) { // app_usage rows (opt-in, anonymous). Paged: the API returns at most 1000 rows per call.
+        const out = [];
+        for (let from = 0; from < 50000; from += 1000) {
+          const rows = unwrap(await sb.from('app_usage').select('app,install_id,day,kind,version,channel,os,sessions,counts,sources').gte('day', daysAgo(days)).order('id').range(from, from + 999));
+          out.push(...rows); if (rows.length < 1000) break;
+        }
+        return out;
+      },
       async snapshots(days = 180) { return unwrap(await sb.from('snapshots').select('day,data').gte('day', daysAgo(days)).order('day')); },
       async siteDaily(days = 60) { return unwrap(await sb.from('site_daily').select('*').gte('day', daysAgo(days))); },
       async sites() { return unwrap(await sb.from('sites').select('*').order('name')); },
@@ -136,12 +145,29 @@
     let admins = [{ email: 'mohamed547754@gmail.com', role: 'super_admin', added_at: daysAgo(30) }, { email: 'mymhelmy80@gmail.com', role: 'super_admin', added_at: daysAgo(30) }];
     const totals = [{ ad_id: 'a1', views: 1840, clicks: 41 }, { ad_id: 'a2', views: 620, clicks: 9 }, { ad_id: 'a3', views: 0, clicks: 0 }];
     let sitesList = sites.slice();
+    // Sample opt-in usage: a few daily users, some regulars and many occasional ones.
+    const demoUsage = [];
+    const FEAT = { askadb: ['questions', 'reports', 'comparisons', 'export_xlsx', 'export_pdf', 'saved_runs', 'scheduled_sent', 'emails_sent'], 'selecta-ai': ['mode_enhance', 'mode_translate', 'mode_polish', 'mode_chat', 'copies', 'replaces', 'chat_searches'] };
+    const SRC = ['postgres', 'excel', 'mysql', 'mssql', 'csv', 'odoo'];
+    for (const [appId, n] of [['askadb', 26], ['selecta-ai', 48]]) for (let k = 0; k < n; k++) {
+      const id = `${appId}-${k}`, habit = r(), start = Math.floor(r() * 55), ver = r() > 0.3 ? (appId === 'askadb' ? '0.3.0' : '1.5.2') : (appId === 'askadb' ? '0.2.0' : '1.5.0');
+      const ch = r() > 0.35 ? 'store' : 'installer', p = habit > 0.8 ? 0.85 : habit > 0.45 ? 0.3 : 0.06;
+      for (let i = start; i >= 0; i--) {
+        if (i !== start && r() > p) continue;
+        const day = daysAgo(i), base = { app: appId, install_id: id, day, version: ver, channel: ch, os: 'win32 10.0.26100' };
+        demoUsage.push({ ...base, kind: 'active', sessions: 0, counts: {}, sources: [] });
+        if (i === 0) continue;
+        const counts = {}; for (const f of FEAT[appId]) if (r() > 0.45) counts[f] = 1 + Math.floor(r() * 6);
+        demoUsage.push({ ...base, kind: 'counts', sessions: 1 + Math.floor(r() * 3), counts, sources: appId === 'askadb' ? [SRC[k % SRC.length]] : [] });
+      }
+    }
     let n = 10;
     return {
       async user() { return { email: 'mohamed547754@gmail.com', user_metadata: { full_name: 'Demo admin' } }; },
       async signIn() {}, async signOut() { location.search = ''; },
       async role() { return 'super_admin'; },
       async snapshots() { return snaps; },
+      async usage() { return demoUsage; },
       async siteDaily() { return daily; },
       async sites() { return sitesList; },
       async addSite(s) { sitesList.push(s); return s; },
@@ -197,8 +223,9 @@
   // ---------- data loading ----------
   async function load(force = false) {
     if (state.cache.loaded && !force) return state.cache;
-    const [snaps, daily, sites, ads, adTotals] = await Promise.all([api.snapshots(), api.siteDaily(), api.sites(), api.ads(), api.adTotals()]);
-    state.cache = { loaded: true, snaps, daily, sites, ads, adTotals };
+    const [snaps, daily, sites, ads, adTotals, usage] = await Promise.all([api.snapshots(), api.siteDaily(), api.sites(), api.ads(), api.adTotals(),
+      api.usage().then((rows) => ({ rows }), (e) => ({ rows: [], error: String(e?.message || e) }))]); // the table may not exist yet
+    state.cache = { loaded: true, snaps, daily, sites, ads, adTotals, usage };
     return state.cache;
   }
   const latest = () => state.cache.snaps?.[state.cache.snaps.length - 1]?.data || null;
@@ -216,11 +243,12 @@
 
   // ---------- shell ----------
   const NAV = [
-    ['overview', 'Overview'], ['apps', 'Apps'], ['sites', 'Sites & visits'], ['ads', 'Ads'], ['settings', 'Settings'],
+    ['overview', 'Overview'], ['apps', 'Apps'], ['usage', 'App usage'], ['sites', 'Sites & visits'], ['ads', 'Ads'], ['settings', 'Settings'],
   ];
   const TITLES = {
     overview: ['Overview', 'Downloads, ratings, visits and ads at a glance'],
     apps: ['Apps', 'Downloads and ratings for every app'],
+    usage: ['App usage', 'Who uses the apps and how often (people who turned on anonymous statistics)'],
     sites: ['Sites & visits', 'Visitors, status and the embed code for each site'],
     ads: ['Ads', 'Create and schedule the ads that show on your sites'],
     settings: ['Settings', 'Admins, ad placement and appearance'],
@@ -274,7 +302,7 @@
     if (location.hash !== '#' + state.view) history.replaceState(null, '', location.pathname + location.search + '#' + state.view);
     shell();
     const v = $('#view');
-    ({ overview, apps, sites, ads, settings })[state.view](v);
+    ({ overview, apps, usage, sites, ads, settings })[state.view](v);
   }
 
   function chart(canvas, config) {
@@ -383,6 +411,89 @@
       </div>`;
     }).join('')}</div>
     <p class="muted" style="font-size:12px;margin-top:14px">Ratings come from the public Microsoft Store page. Store installs become live once the Partner Center key is added to GitHub.</p>`;
+  }
+
+  // ---------- App usage (anonymous, opt-in rows from the apps) ----------
+  const USAGE_APPS = { askadb: 'AskaDB', 'selecta-ai': 'Selecta AI' };
+  const FEATURE_NAMES = {
+    questions: 'Questions answered by AI', answers_from_schema: 'Answers from the schema (no AI)', sql_runs: 'SQL runs', reports: 'Reports run', comparisons: 'Period comparisons',
+    saved_reports: 'Reports saved', saved_questions: 'Questions saved', saved_runs: 'Saved items re-run', export_csv: 'CSV exports', export_xlsx: 'Excel exports', export_pdf: 'PDF exports',
+    emails_sent: 'Results emailed', schedules_created: 'Schedules created', scheduled_sent: 'Scheduled emails sent', scheduled_failed: 'Scheduled emails failed', charts: 'Charts',
+    popup_opens: 'Shortcut used (popup opened)', copies: 'Copied answers', replaces: 'Replaced text in place', chat_searches: 'Chat searches', chat_imports: 'Chat imports', webchat_opens: 'Web chats opened',
+    data_questions: 'Data questions', mode_enhance: 'Mode: Enhance prompt', mode_coding: 'Mode: Coding', mode_polish: 'Mode: Polish', mode_rewrite: 'Mode: Rewrite', mode_translate: 'Mode: Translate', mode_chat: 'Mode: Chat',
+  };
+  function usageStats(rows, appId) {
+    const R = rows.filter((x) => !appId || x.app === appId);
+    const active = R.filter((x) => x.kind === 'active'), counts = R.filter((x) => x.kind === 'counts');
+    const daysBy = new Map(), first = new Map(), last = new Map();
+    for (const x of active) {
+      (daysBy.get(x.install_id) || daysBy.set(x.install_id, new Set()).get(x.install_id)).add(x.day);
+      if (!first.has(x.install_id) || x.day < first.get(x.install_id)) first.set(x.install_id, x.day);
+      if (!last.has(x.install_id) || x.day > last.get(x.install_id)) last.set(x.install_id, x);
+    }
+    const within = (id, n) => { const since = daysAgo(n - 1); return [...daysBy.get(id)].some((d) => d >= since); };
+    const ids = [...daysBy.keys()];
+    const activeIn = (n) => ids.filter((id) => within(id, n)).length;
+    const since30 = daysAgo(29);
+    const buckets = { daily: 0, regular: 0, occasional: 0 };
+    for (const id of ids) { const n = [...daysBy.get(id)].filter((d) => d >= since30).length; if (n >= 15) buckets.daily++; else if (n >= 4) buckets.regular++; else if (n >= 1) buckets.occasional++; }
+    const dau = [...Array(30)].map((_, i) => { const d = daysAgo(29 - i); return { d, n: active.filter((x) => x.day === d).length }; });
+    const avgDau = dau.reduce((t, x) => t + x.n, 0) / 30;
+    const feats = {}; const srcs = {};
+    for (const x of counts.filter((c) => c.day >= since30)) {
+      for (const [k, n] of Object.entries(x.counts || {})) feats[k] = (feats[k] || 0) + Number(n || 0);
+      for (const s of x.sources || []) (srcs[s] || (srcs[s] = new Set())).add(x.install_id);
+    }
+    const group = (key) => { const m = {}; for (const x of last.values()) if (within(x.install_id, 30)) m[x[key] || '—'] = (m[x[key] || '—'] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+    const cohort = ids.filter((id) => first.get(id) >= daysAgo(30) && first.get(id) <= daysAgo(8)); // started 8-30 days ago
+    const retained = cohort.filter((id) => within(id, 7)).length;
+    return { total: ids.length, today: activeIn(1), d7: activeIn(7), d30: activeIn(30), new30: ids.filter((id) => first.get(id) >= since30).length, avgDau, buckets, dau,
+      feats: Object.entries(feats).sort((a, b) => b[1] - a[1]), srcs: Object.entries(srcs).map(([k, v]) => [k, v.size]).sort((a, b) => b[1] - a[1]),
+      versions: group('version'), channels: group('channel'), cohort: cohort.length, retained, sessions30: counts.filter((c) => c.day >= since30).reduce((t, c) => t + Number(c.sessions || 0), 0) };
+  }
+  function usage(v) {
+    const U = state.cache.usage || { rows: [] };
+    const pick = state.usageApp || '';
+    const S = usageStats(U.rows, pick);
+    const L = latest();
+    const storeOf = (name) => L?.apps?.find((a) => a.name === name)?.store;
+    const storeLine = (pick ? [USAGE_APPS[pick]] : Object.values(USAGE_APPS)).map((n) => { const st = storeOf(n); return st ? `${esc(n)}: ${fmt(st.installs)} Store installs${st.source === 'manual' ? ' (read by hand)' : ''}` : ''; }).filter(Boolean).join(' · ');
+    const table = (rows, head, label = (k) => esc(k)) => rows.length ? `<table><tr><th>${head}</th><th class="r">Count</th></tr>${rows.map(([k, n]) => `<tr><td>${label(k)}</td><td class="r num">${fmt(n)}</td></tr>`).join('')}</table>` : '<div class="empty">No data yet.</div>';
+    v.innerHTML = `
+      <div class="panel" style="padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${[['', 'All apps'], ...Object.entries(USAGE_APPS)].map(([id, n]) => `<button class="btn sm ${pick === id ? 'primary' : ''}" data-app="${id}">${esc(n)}</button>`).join('')}
+        <span class="muted" style="font-size:12px;margin-left:auto">${storeLine}</span>
+      </div>
+      ${U.error ? `<div class="panel empty" style="margin-top:16px">Usage data is not available yet: ${esc(U.error)}. Run <code>supabase/usage.sql</code> once in the Supabase SQL Editor.</div>` : ''}
+      ${!U.error && !S.total ? '<div class="panel empty" style="margin-top:16px">No usage yet. Numbers appear after people turn on "Share anonymous usage statistics" in the new app versions (AskaDB 0.3.0, Selecta AI with this update).</div>' : ''}
+      <div class="grid kpis" style="margin-top:16px">
+        ${kpi('Active today', fmt(S.today), `${fmt(S.total)} devices seen (60 days)`)}
+        ${kpi('Active, last 7 days', fmt(S.d7), `Avg ${S.avgDau.toFixed(1)} per day`)}
+        ${kpi('Active, last 30 days', fmt(S.d30), `${fmt(S.sessions30)} app starts`)}
+        ${kpi('New devices (30 days)', fmt(S.new30), '')}
+        ${kpi('Stickiness (DAU / MAU)', S.d30 ? pct(S.avgDau, S.d30) : '—', 'Above 20% is good')}
+        ${kpi('Still active after a week', S.cohort ? pct(S.retained, S.cohort) : '—', `${fmt(S.retained)} of ${fmt(S.cohort)} who started 8-30 days ago`)}
+      </div>
+      <div class="grid two" style="margin-top:16px">
+        <div class="panel"><div class="panel-head"><h3>Active devices per day</h3><span class="muted" style="font-size:12px">last 30 days</span></div><div class="panel-body"><div class="chart-box"><canvas id="u1"></canvas></div></div></div>
+        <div class="panel"><div class="panel-head"><h3>How often people use it</h3><span class="muted" style="font-size:12px">days active in the last 30</span></div><div class="panel-body"><div class="chart-box"><canvas id="u2"></canvas></div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">Daily: 15+ days · Regular: 4-14 days · Occasional: 1-3 days</p></div></div>
+      </div>
+      <div class="grid two" style="margin-top:16px">
+        <div class="panel"><div class="panel-head"><h3>Features used (30 days)</h3></div><div class="table-wrap">${table(S.feats, 'Feature', (k) => esc(FEATURE_NAMES[k] || k))}</div></div>
+        <div class="panel"><div class="panel-head"><h3>Data source types</h3><span class="muted" style="font-size:12px">devices, 30 days</span></div><div class="table-wrap">${table(S.srcs, 'Type')}</div></div>
+      </div>
+      <div class="grid two" style="margin-top:16px">
+        <div class="panel"><div class="panel-head"><h3>Versions in use</h3></div><div class="table-wrap">${table(S.versions, 'Version')}</div></div>
+        <div class="panel"><div class="panel-head"><h3>Where they installed from</h3></div><div class="table-wrap">${table(S.channels, 'Channel', (k) => esc({ store: 'Microsoft Store', installer: 'Installer (GitHub)', dev: 'Developer build' }[k] || k))}</div></div>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:14px">Only people who turned on anonymous statistics are counted, so real usage is higher. A device is a random ID, not a person. No names, emails, questions, text or data are collected.</p>`;
+    $$('[data-app]', v).forEach((b) => (b.onclick = () => { state.usageApp = b.dataset.app; render(); }));
+    const pal = PALETTE();
+    chart($('#u1'), { type: 'line', data: { labels: S.dau.map((x) => niceDay(x.d)), datasets: [{ label: 'Active devices', data: S.dau.map((x) => x.n), borderColor: pal[0], backgroundColor: pal[0] + '22', fill: true, tension: .3, pointRadius: 0, borderWidth: 2.5 }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: true, ticks: { precision: 0 } } } } });
+    chart($('#u2'), { type: 'bar', data: { labels: ['Daily', 'Regular', 'Occasional'], datasets: [{ data: [S.buckets.daily, S.buckets.regular, S.buckets.occasional], backgroundColor: [pal[0], pal[1], pal[2]], borderRadius: 4 }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } } } });
   }
 
   function snippet(id) { return `<script src="${SNIPPET_URL}" data-site="${id}" defer><\/script>`; }
